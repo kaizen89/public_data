@@ -1,15 +1,20 @@
 ---
-title: "Report_Leader_DC_reanalysis"
+title: "Report_Analysis of Langerhans cells from public datasets"
 author: "Abdenour ABBAS "
 date: '`r format(Sys.Date(), "%B %d, %Y")`'
-output:
-  md_document:
-    variant: markdown_github
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
 theme: lumen
 editor_options: 
   chunk_output_type: inline
-    
 ---
+
+<!-- github markdown built using 
+rmarkdown::render("vignettes/ligand_activity_geneset.Rmd", output_format = "github_document")
+-->
+
 
 ```{css, echo=FALSE}
 /* Section headers */
@@ -275,7 +280,7 @@ atlas_skin_seu = qread("../../../../../data_global/public/single_cellRNA/Skin/At
 ```{r}
 atlas_skin_seu= NormalizeData(atlas_skin_seu)
 DimPlot(atlas_skin_seu)
-str(atlas_skin_seu)
+# str(atlas_skin_seu)
 atlas_skin_myelo = subset(atlas_skin_seu, celltype=="Myeloid Cells") 
 # qsave(atlas_skin_myelo, "../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo.qs", nthreads = 8)
 ```
@@ -286,7 +291,7 @@ atlas_skin_myelo = subset(atlas_skin_seu, celltype=="Myeloid Cells")
 
 # same object but already clustered
 atlas_skin_myelo_tmp = qread("../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo_processed_intermediate.qs", nthreads = 8)
-str(atlas_skin_myelo_tmp)
+# str(atlas_skin_myelo_tmp)
 ```
 
 ```{r}
