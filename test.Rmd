@@ -1,0 +1,24 @@
+---
+title: "My Analysis"
+output: md_document
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(upload.fun = knitr::image_uri)
+knitr::opts_chunk$set(fig.width=6, fig.height=4)
+
+```
+
+```{r }
+library(ggplot2)
+ggplot(mtcars, aes(wt, mpg)) + geom_point()
+```
+
+
+
+Then render it with
+```{r }
+# rmarkdown::render("my_vignette.Rmd", output_format = "md_document")
+```

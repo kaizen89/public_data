@@ -2,18 +2,17 @@
 title: "Report_Analysis of Langerhans cells from public datasets"
 author: "Abdenour ABBAS "
 date: '`r format(Sys.Date(), "%B %d, %Y")`'
-output: rmarkdown::html_vignette
-vignette: >
-  %\VignetteEngine{knitr::rmarkdown}
-  %\VignetteEncoding{UTF-8}
-theme: lumen
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    theme: flatly
+    highlight: tango
+    self_contained: true
 editor_options: 
   chunk_output_type: inline
 ---
-
-<!-- github markdown built using 
-rmarkdown::render("vignettes/ligand_activity_geneset.Rmd", output_format = "github_document")
--->
 
 
 ```{css, echo=FALSE}
@@ -143,7 +142,8 @@ DimPlot(merged, group.by = "subtype")
 
 Read the already filtered object
 ```{r eval=T}
-seu_sub = qs::qread("human_skin_wound_healing_GSE241132_Myeloid_filtered.qs", nthreads = 8)
+# seu_sub = qs::qread("human_skin_wound_healing_GSE241132_Myeloid_filtered.qs", nthreads = 8)
+seu_sub = qs::qread("human_skin_wound_healing_GSE241132_Myeloid_filtered_processed.qs", nthreads = 8)
 ```
 
 Let's exclude some gene lists from the clustering / visualization as they may hide relevant biological signals.
@@ -260,7 +260,7 @@ top_markers_distinct = markers %>% filter(!feature %in% genes_mask_plot &  avgEx
 ## 1.5. Saving Data
 ```{r}
 # qsave(seu_sub, "human_skin_wound_healing_GSE241132_Myeloid_filtered_processed.qs", nthreads = 8)
-seu_sub = qs::qread("human_skin_wound_healing_GSE241132_Myeloid_filtered_processed.qs", nthreads = 8)
+# seu_sub = qs::qread("human_skin_wound_healing_GSE241132_Myeloid_filtered_processed.qs", nthreads = 8)
 ```
 
  ################################################################################
