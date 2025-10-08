@@ -1,15 +1,11 @@
 ---
 title: "My Analysis"
-output: md_document
+output: 
+  github_document:
+    html_preview: false
 ---
 
 
-
-```{r setup, include=FALSE}
-knitr::opts_knit$set(upload.fun = knitr::image_uri)
-knitr::opts_chunk$set(fig.width=6, fig.height=4)
-
-```
 
 ```{r }
 library(ggplot2)
