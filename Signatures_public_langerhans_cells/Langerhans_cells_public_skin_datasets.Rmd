@@ -1,0 +1,723 @@
+---
+title: "Report_Leader_DC_reanalysis"
+author: "Abdenour ABBAS "
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    code_folding: show
+theme: lumen
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, message=FALSE}
+library(knitr)
+opts_chunk$set(fig.align = "center",
+               fig.retina = 2,
+               fig.width = 10,
+               cache = TRUE,
+               cache.lazy = FALSE,
+               # max.print = 10,
+               out.lines = 10)
+
+# Load libraries
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(parallel)
+library(tidyverse)
+library(qs)
+library(presto)
+library(simspec)
+library(nichenetr)
+library(patchwork)
+library(nichenetr,quietly = T)
+
+# Load utility scripts
+config <- yaml::read_yaml("/pasteur/helix/projects/Dcai/Abdenour/analysis/utils/config.yaml")
+source(paste0(config$path_to_scripts, "plot_heatmap2.R"))
+source(paste0(config$path_to_scripts, "utils.R"))
+source(paste0(config$path_to_scripts, "genes_related.R"))
+# Force Seurat to use v3 assays 
+options(Seurat.object.assay.version = 'v3') # https://github.com/satijalab/seurat/issues/8164
+
+# Use custom colors in ggplot2
+options(ggplot2.discrete.colour=pal)
+options(ggplot2.discrete.fill=pal)
+# scales::show_col(pal)
+```
+
+# 1. Wound Healing Dataset
+```{r Load Data, eval=F}
+# ---- PARAMETERS ----
+# Path where all 10X subfolders are located
+data_dir <- "../../../../../data_global/public/single_cellRNA/Skin/GSE241132_human skin wound healing/GSE241132_RAW/"  # <- change this
+
+# Get all subfolders (each one should contain matrix.mtx.gz, barcodes.tsv.gz, features.tsv.gz)
+folders <- list.dirs(data_dir, full.names = TRUE, recursive = FALSE)
+
+# ---- LOAD ALL DATASETS ----
+seurat_list <- list()
+
+for (folder in folders) {
+  sample_name <- basename(folder)  # use folder name as sample ID
+  cat("Loading:", sample_name, "\n")
+  
+  counts <- Read10X(data.dir = folder)
+  seurat_obj <- CreateSeuratObject(counts = counts, project = sample_name)
+  
+  # Store sample ID in metadata
+  seurat_obj$sample <- sample_name
+  
+  seurat_list[[sample_name]] <- seurat_obj
+}
+
+# ---- MERGE INTO ONE OBJECT ----
+# Take the first as reference, then merge all others
+for (i in names(seurat_list)) {
+  seurat_list[[i]] <- RenameCells(seurat_list[[i]],
+                                         add.cell.id = i)
+}
+
+merged <- seurat_list[[1]]
+if (length(seurat_list) > 1) {
+  for (i in 2:length(seurat_list)) {
+    merged <- merge(merged, y = seurat_list[[i]])
+  }
+}
+
+# extract the D + number part
+merged$timepoint =  sub(".*(D[0-9]+)$", "\\1", merged$orig.ident)
+merged$timepoint = factor(merged$timepoint, levels=c("D0","D1","D7","D30"))
+merged$patient_ID =  sub("(PWH[0-9]+).*$", "\\1", merged$orig.ident) 
+merged$barcode = colnames(merged)
+merged = PercentageFeatureSet(merged, pattern = "^MT-", col.name = "percent.mt")
+# ---- SAVE RESULT ----
+VlnPlot(merged, "nFeature_RNA")+ scale_y_log10()
+# cat("✅ Done! Saved merged Seurat object as merged_seurat.rds\n")
+```
+
+```{r eval=F}
+merged = qs::qread("../objects/human_skin_wound_healing_GSE241132.qs")
+```
+
+## 1.1. Subsetting myloid cells
+```{r eval=F}
+# 65521  cells
+merged %<>% subset(subset= nFeature_RNA>500) %<>% subset(percent.mt <20) 
+# 62134 cells
+# plot(density(merged$percent.mt)) 
+# plot(density(metadata$nCount_RNA))
+# table(merged$nFeature_RNA<501) 
+metadata <- read.delim("../../../../../data_global/public/single_cellRNA/Skin/GSE241132_human skin wound healing/GSE241132_cell_metadata.txt")
+merged$cell_type = metadata$newMainCellTypes[match(merged$barcode, metadata$barcode)]
+merged$subtype = metadata$newCellTypes[match(merged$barcode, metadata$barcode)]
+DimPlot(merged, group.by = "subtype")
+# seu_sub = subset(merged, cell_type=="Myeloid", invert=F)
+# qsave(seu_sub, "human_skin_wound_healing_GSE241132_Myeloid_filtered.qs", nthreads = 8)
+```
+
+## 1.1. Subsetting myloid cells
+```{r eval=T}
+seu_sub = qs::qread("human_skin_wound_healing_GSE241132_Myeloid_filtered.qs", nthreads = 8)
+```
+
+Let's exclude some gene lists from the clustering / visualization as they may hide relevant biological signals.
+```{r Prepare gene masks, eval=T}
+all_genes <- rownames(seu_sub)
+HB_genes <- c("HBB","HBA1","HBA2", "HBD","HBE1","HBG1","HBM","HBBP1","HBQ1","AHSP")
+metallothionein=c('MT1HL1','MT2A','MT1E','MT1M','MT1A','MT1B','MT1F','MT1G','MT1H','MT1X')
+rpgenes= grep("^RP[LS0-9]", all_genes, value=T) # 
+other=c("MALAT1","XIST","JCHAIN")
+hsp_genes=grep("^HSP", all_genes, value=T) 
+dnaj_genes=grep("^DNAJ", all_genes, value=T)
+stress_genes= c("JUN","FOS","FOSB","JUNB","ATF3","ATF4",dnaj_genes,hsp_genes)
+mtgenes=grep("^MT-", all_genes, value=T) 
+MTRN_genes=grep("^MTRN", all_genes, value=T)
+IGgenes = grep("^IG[KLH]", all_genes, value=T)
+HLAgenes = grep("^HLA-", all_genes, value=T)
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+cell_cycle_genes = c(s.genes,g2m.genes)
+genes_mask_clust = c(cell_cycle_genes,HB_genes, metallothionein, rpgenes,other,IGgenes,HLAgenes,MTRN_genes,mtgenes) #stress_genes
+genes_mask_plot = c(HB_genes, metallothionein, rpgenes,other,IGgenes,MTRN_genes,mtgenes)#stress_genes
+```
+
+## 1.2. DimReduction 
+```{r }
+DefaultAssay(seu_sub) = "RNA"
+seu_sub = NormalizeData(seu_sub)
+seu_sub <- CellCycleScoring(seu_sub, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+seu_sub = FindVariableFeatures(seu_sub)
+vargenes = setdiff(VariableFeatures(seu_sub), genes_mask_clust)
+seu_sub <- ScaleData(seu_sub, assay = "RNA", features = vargenes, vars.to.regress =  c("S.Score", "G2M.Score"))
+seu_sub <- RunPCA(seu_sub,verbose = FALSE, npcs = 50, reduction.name = "pca", features = vargenes)
+nPC= 15
+ElbowPlot(seu_sub, ndims = 50, reduction = "pca")+geom_vline(xintercept=nPC,  color="red")
+seu_sub <- RunUMAP(seu_sub, reduction = "pca",min.dist = 0.5,spread = 1,  dims = 1:nPC, reduction.name = "umap")
+```
+
+## 1.3. Clustering
+
+```{r fig.height=9, fig.width=12}
+DimPlot(seu_sub)
+
+# 36600 features across 65521
+seu_sub <- FindNeighbors(seu_sub, reduction = "pca", dims = 1:nPC)
+seu_sub <- FindClusters(seu_sub, resolution = 0.2)
+# Cluster 6 are DC, subset object to cluster 6 and recluster
+DimPlot(seu_sub)
+ 
+cells= Cells(seu_sub)
+FeaturePlot(seu_sub, features=c("FCER1A","CD1C","C5AR1","FOLR2","CD207","SPP1","SELENOP","TREM2"), cells = cells, ncol=4, reduction= "umap") & NoAxes()&coord_equal()
+markers = presto::wilcoxauc(seu_sub)
+markers_dist = markers %>% filter(!feature %in% genes_mask_clust) %>% arrange(desc(avgExpr)) %>% distinct(feature,.keep_all = TRUE) %>%  group_by(group) %>% arrange(desc(auc)) %>% slice_head(n = 30)
+```
+
+## 1.4. Annotation and reordering of clusters
+```{r eval=F}
+VlnPlot(seu_sub, features =c("CD1C","FCER1A","CLEC10A","CD207","CD1A","EPCAM","CCR6","VCAN","FCN1","C5AR1","IDO1","CCR7","CLEC9A","CD14"), fill="ident",stack=T, flip=T, group.by = "annot_lev3")+NoLegend()+plot_layout(ncol=3)
+p <- SCpubr::do_CorrelationPlot(sample = seu_sub,
+                                group.by = "RNA_snn_res.0.2",
+                                legend.position = "right")
+# levels(p$data$x)
+seu_sub$seurat_clusters = factor(seu_sub$RNA_snn_res.0.2, levels= c("4","1","2","0","3","5","6","7"))  # levels(p$data$x)
+
+seu_sub$res.0.2 = plyr::mapvalues(seu_sub$seurat_clusters, from = levels(seu_sub$seurat_clusters), to =c(1:8))
+seu_sub$annot_lev3 = plyr::mapvalues(seu_sub$res.0.2, from = c(1:8), to =c("MonoMac_1","MonoMac_2","MonoMac_3","DC2_CCR7","DC2_CD1A_CCR7","DC1","mature_DC","LC"))
+seu_sub@active.ident = seu_sub$annot_lev3
+```
+
+
+## 1.4. Visualization
+Heatmaps
+```{r , fig.height=10.5, fig.width=11.5, eval=T}
+seu_sub$seurat_clusters = seu_sub@active.ident
+markers = presto::wilcoxauc(seu_sub, group_by="seurat_clusters")
+top_markers= presto_topn_auc(markers,object= seu_sub@active.ident,min_pct_in=10, genes_filter=genes_mask_plot, top_n = 15,minavgExpr=0.1)
+
+seu_sub <- ScaleData(seu_sub,features=c(top_markers$feature))
+
+
+plot_heatmap2(seu_sub, markers =unique(c(top_markers$feature)),sort_var = c("seurat_clusters","subtype","timepoint"),
+              anno_var = c("seurat_clusters","subtype","timepoint"),
+              anno_colors = list(pal,pal,pal),
+              hm_colors = c("purple","black","yellow"),
+              hm_limit = c(-2,0,2),legend2show = c(T,T,T,T,T,F),padding = unit(c(0, 0, 0,2), "cm"),
+              row_font_size = 7)
+
+VlnPlot(seu_sub, features =c("CD1C","FCER1A","CLEC10A","CD207","CD1A","EPCAM","CCR6","ITGAE","HPGDS","IL18R1","SIGLEC9","CD72","LAMP3","IDO1","CCR7","CLEC9A","CD14"), fill="ident",stack=T, flip=T)+NoLegend()+plot_layout(ncol=3)
+
+top_markers= presto_topn_auc(markers,object= seu_sub@active.ident,min_pct_in=10, max_pct_out = 100, genes_filter=genes_mask_clust, top_n = 100,minavgExpr=0.1)
+
+seu_sub <- ScaleData(seu_sub,features=c(top_markers$feature))
+
+plot_heatmap2(seu_sub,  markers = unique(c(top_markers$feature[top_markers$group=="7"])),sort_var = c("seurat_clusters","subtype","timepoint"),
+              anno_var = c("seurat_clusters","subtype","timepoint"),
+              anno_colors = list(pal,pal,pal),
+              hm_colors = c("purple","black","yellow"),
+              hm_limit = c(-2,0,2),legend2show = c(T,T,T,T,T,F),padding = unit(c(0, 0, 0, 5), "cm"),
+              row_font_size = 7)
+
+markers = presto::wilcoxauc(seu_sub) 
+
+markers$feature = UpdateSymbolsHuman(markers$feature)
+
+top_markers = markers %>% filter(!feature %in% genes_mask_plot & avgExpr>0.1 & logFC>0.1  & pct_in>10) %>% group_by(group) %>% arrange(desc(auc),.by_group =T )
+
+top_markers_distinct = markers %>% filter(!feature %in% genes_mask_plot &  avgExpr>0.1 & pct_in>10 & logFC>0.1)  %>% arrange(desc(avgExpr)) %>% distinct(feature,.keep_all = TRUE) %>% group_by(group) %>% arrange(desc(auc), .by_group =T)
+
+# WriteXLS::WriteXLS(top_markers_distinct, "results/skin_wound_healing_myeloid_clusters_markers_distinct.xlsx")
+# WriteXLS::WriteXLS(top_markers, "results/skin_wound_healing_myeloid_clusters_markers.xlsx")
+```
+
+
+
+## 1.5. Saving Data
+```{r}
+# qsave(seu_sub, "human_skin_wound_healing_GSE241132_Myeloid_filtered_processed.qs", nthreads = 8)
+seu_sub = qs::qread("human_skin_wound_healing_GSE241132_Myeloid_filtered_processed.qs", nthreads = 8)
+```
+
+ ################################################################################
+ ################################################################################
+ ################################################################################
+
+# 2. Multi-site Skin Atlas
+Multi site Skin Atlas (biorXiv)
+```{r}
+# atlas_skin_seu = readRDS("../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3.RDS")
+atlas_skin_seu@assays$RNA$scale.data = NULL
+# qsave(atlas_skin_seu, "../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3.qs", nthreads = 8)
+atlas_skin_seu = qread("../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3.qs", nthreads = 8)
+```
+## 2.1 Subsetting myeloid cells
+
+```{r}
+atlas_skin_seu= NormalizeData(atlas_skin_seu)
+DimPlot(atlas_skin_seu)
+str(atlas_skin_seu)
+atlas_skin_myelo = subset(atlas_skin_seu, celltype=="Myeloid Cells") 
+# qsave(atlas_skin_myelo, "../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo.qs", nthreads = 8)
+atlas_skin_myelo = qread("../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo.qs", nthreads = 8)
+str(atlas_skin_myelo)
+```
+
+```{r}
+all_genes <- rownames(atlas_skin_myelo)
+
+HB_genes <- c("HBB","HBA1","HBA2", "HBD","HBE1","HBG1","HBM","HBBP1","HBQ1","AHSP")
+metallothionein=c('MT1HL1','MT2A','MT1E','MT1M','MT1A','MT1B','MT1F','MT1G','MT1H','MT1X')
+rpgenes= grep("^RP[LS0-9]", all_genes, value=T) # 
+other=c("MALAT1","XIST","JCHAIN",grep("^IGLL", all_genes, value=T))
+mtgenes=grep("^MT-", all_genes, value=T) 
+MTRN_genes=grep("^MTRN", all_genes, value=T)
+# stress_genes = c("HSPA1B","HSPA6","DNAJB1","HSPA1A","HSPB1","JUN","UBB","DNAJB4","BAG3","UBC","SOD1","RGS2","EIF4A2","SERPINH1","DEDD2","CLK1","AHSA1","COMMD6","HSP90AA1","HSPH1","HSPE1","HSPD1","HSP90AB1","DUSP1","HSPA8","FOS","DNAJA1","PPP1R15A","CACYBP","KLF6","ZFAND2A","NR4A1","FOSB","DNAJA4","CHORDC1","MRPL18","BTG2","FKBP4","NEU1","ATF3","MYADM","ERN1","DOK2","GADD45B","TXNIP","NABP1","SOD2","TCP1","DNAJB6","RHOB","H3F3B","MXD1","AC020916.1","IER5","JUNB","TNFSF14")
+IGgenes = grep("^IG[KLH]", all_genes, value=T)
+HLAgenes = grep("^HLA-", all_genes, value=T)
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+cell_cycle_genes = c(s.genes,g2m.genes)
+genes_mask_clust = c(cell_cycle_genes,HB_genes, metallothionein, rpgenes,other,IGgenes,HLAgenes,MTRN_genes,mtgenes)
+genes_mask_plot = c(HB_genes, metallothionein, rpgenes,other,IGgenes,MTRN_genes,mtgenes)
+```
+
+
+## 2.2.  DimReduction
+```{r }
+DefaultAssay(atlas_skin_myelo) = "RNA"
+atlas_skin_myelo = NormalizeData(atlas_skin_myelo) 
+atlas_skin_myelo <- CellCycleScoring(atlas_skin_myelo, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+atlas_skin_myelo = FindVariableFeatures(atlas_skin_myelo, nfeatures = 2000)
+vargenes = setdiff(VariableFeatures(atlas_skin_myelo), genes_mask_clust)
+VariableFeatures(atlas_skin_myelo)= vargenes
+atlas_skin_myelo <- ScaleData(atlas_skin_myelo, assay = "RNA", features = vargenes, vars.to.regress =  c("S.Score", "G2M.Score"))
+atlas_skin_myelo <- RunPCA(atlas_skin_myelo,verbose = FALSE, npcs = 50, reduction.name = "pca", features = vargenes)
+nPC= 19
+ElbowPlot(atlas_skin_myelo, ndims = 50, reduction = "pca")+geom_vline(xintercept=nPC,  color="red")
+
+```
+
+## 2.3. Clustering
+
+```{r fig.height=9, fig.width=12}
+# 33952 features across 24700
+atlas_skin_myelo <- FindNeighbors(atlas_skin_myelo, reduction = "pca", dims = 1:nPC)
+atlas_skin_myelo <- FindClusters(atlas_skin_myelo, resolution = 0.3)
+atlas_skin_myelo <- RunUMAP(atlas_skin_myelo, reduction = "pca",min.dist = 0.5,spread = 1,  dims = 1:nPC, reduction.name = "umap")
+DimPlot(atlas_skin_myelo)
+atlas_skin_myelo <- FindClusters(atlas_skin_myelo, resolution = 0.2)
+
+# Cluster 6 are DC, subset object to cluster 6 and recluster
+cells= Cells(atlas_skin_myelo)
+FeaturePlot(atlas_skin_myelo, features=c("FCER1A","CD1C","C5AR1","FOLR2","CD207","CLEC9A","XCR1","CLEC10A"), cells = cells, ncol=4, reduction= "umap") & NoAxes()&coord_equal()
+markers = presto::wilcoxauc(atlas_skin_myelo,group.by = "seurat_clusters")
+
+markers_dist = markers %>% filter(!feature %in% genes_mask_clust) %>% arrange(desc(avgExpr)) %>% distinct(feature,.keep_all = TRUE) %>%  group_by(group) %>% arrange(desc(auc)) %>% slice_head(n = 30)
+
+DimPlot(atlas_skin_myelo, group.by = "seurat_clusters")
+
+```
+
+## 2.4. Visualization and removing junk clusters
+Heatmaps
+```{r , fig.height=11, fig.width=12.5, eval=T}
+atlas_skin_myelo@active.ident = factor(atlas_skin_myelo$seurat_clusters)
+genes2show= c("CD1C","FCER1A","CLEC10A","CD207","CD1A","CCR6","EPCAM")
+markers = presto::wilcoxauc(atlas_skin_myelo, group_by="seurat_clusters")
+top_markers= presto_topn_auc(markers,object= atlas_skin_myelo@active.ident,min_pct_in=10, genes_filter=genes_mask_clust, top_n = 12,minavgExpr=0.1)
+
+atlas_skin_myelo <- ScaleData(atlas_skin_myelo,features=c(genes2show,top_markers$feature))
+atlas_skin_myelo$log_nCount = log10(atlas_skin_myelo$nCount_RNA)
+
+plot_heatmap2(atlas_skin_myelo, markers =c(genes2show,top_markers$feature),sort_var = c("seurat_clusters","bodysite","log_nCount"),
+              anno_var = c("seurat_clusters","bodysite","log_nCount"),
+              anno_colors = list(pal,pal,dim_pal),
+              hm_colors = c("purple","black","yellow"),
+              hm_limit = c(-2,0,2),legend2show = c(T,T,F,T,T,F),
+              row_font_size = 7)
+VlnPlot(atlas_skin_myelo, "log_nCount")+plot_layout(nrow=3, ncol=2)
+
+# remove clusters: 2 KRT epithelial+ Collagenes, 6, 9 & 11 low quality, 8 B cells, 10 collagenes 
+plot(density(atlas_skin_myelo$log_nCount))
+atlas_skin_myelo = subset(atlas_skin_myelo, idents= c(2,6,9,11,8,10), invert=T)
+# 34621 features across 8975
+```
+## 2.5. Repeating DimReduction
+```{r}
+atlas_skin_myelo = FindVariableFeatures(atlas_skin_myelo, nfeatures = 2000)
+vargenes = setdiff(VariableFeatures(atlas_skin_myelo), genes_mask_clust)
+VariableFeatures(atlas_skin_myelo)= vargenes
+atlas_skin_myelo <- ScaleData(atlas_skin_myelo, assay = "RNA", features = vargenes, vars.to.regress =  c("S.Score", "G2M.Score"))
+atlas_skin_myelo <- RunPCA(atlas_skin_myelo,verbose = FALSE, npcs = 50, reduction.name = "pca", features = vargenes)
+nPC= 17
+ElbowPlot(atlas_skin_myelo, ndims = 50, reduction = "pca")+geom_vline(xintercept=nPC,  color="red")+plot_layout(nrow=2, ncol=2)
+```
+
+## 2.6. Repeating Clustering
+
+```{r fig.height=9, fig.width=12}
+# 33952 features across 24700
+atlas_skin_myelo <- FindNeighbors(atlas_skin_myelo, reduction = "pca", dims = 1:nPC)
+atlas_skin_myelo <- FindClusters(atlas_skin_myelo, resolution = 0.3)
+atlas_skin_myelo <- RunUMAP(atlas_skin_myelo, reduction = "pca",min.dist = 0.5,spread = 1,  dims = 1:nPC, reduction.name = "umap")
+DimPlot(atlas_skin_myelo)
+```
+
+## 2.6. Annotation and reordering of clusters
+```{r eval=F}
+# p <- SCpubr::do_CorrelationPlot(sample = atlas_skin_myelo,
+#                                 group.by = "RNA_snn_res.0.3",
+#                                 legend.position = "right")
+# levels(p$data$x)
+atlas_skin_myelo$seurat_clusters = factor(atlas_skin_myelo$RNA_snn_res.0.3, levels= c("4","7","3","0","8","5","6","2","1"))  # levels(p$data$x)
+
+atlas_skin_myelo$res.0.3 = plyr::mapvalues(atlas_skin_myelo$seurat_clusters, from = c("4","7","3","0","8","5","6","2","1"), to =c(1:9))
+atlas_skin_myelo$annot_lev3 = plyr::mapvalues(atlas_skin_myelo$res.0.3, from = c(1:9), to =c("DC1","mature_DC","DC2","DC2_CCR7","DC2_cyc","DC3","DC_other","DC2_CD207","MonoMac"))
+atlas_skin_myelo@active.ident = atlas_skin_myelo$annot_lev3
+```
+
+## 2.7 Save final processed object
+```{r eval=T}
+# qsave(atlas_skin_myelo, "../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo_reprocessed.qs", nthreads = 8)
+atlas_skin_myelo = qread("../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo_reprocessed.qs", nthreads = 8)
+```
+
+```{r eval=T}
+atlas_skin_myelo = qread("../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo_reprocessed.qs", nthreads = 8)
+DimPlot(atlas_skin_myelo, group.by = c("RNA_snn_res.0.3", "res.0.3", "annot_lev3"), ncol=3, reduction= "umap") & NoAxes()&coord_equal()
+```
+
+## 2.8. Visualization
+Heatmaps
+```{r , fig.height=11, fig.width=12.5, eval=T}
+atlas_skin_myelo@active.ident = factor(atlas_skin_myelo$annot_lev3)
+genes2show= c("CD1C","FCER1A","CLEC10A","CD207","CD1A","ITGAE","IL18R1","CCR6","EPCAM","LAMP3","IDO1","CCR7","CLEC9A")
+markers = presto::wilcoxauc(atlas_skin_myelo, group_by="annot_lev3")
+top_markers= presto_topn_auc(markers,object= atlas_skin_myelo@active.ident,min_pct_in=10, genes_filter=genes_mask_plot, top_n = 12,minavgExpr=0.1)
+
+atlas_skin_myelo <- ScaleData(atlas_skin_myelo,features=c(genes2show,top_markers$feature))
+
+plot_heatmap2(atlas_skin_myelo, markers =c(genes2show,top_markers$feature),sort_var = c("annot_lev3","bodysite"),
+              anno_var = c("annot_lev3","bodysite"),
+              anno_colors = list(pal,pal,pal),
+              hm_colors = c("purple","black","yellow"),
+              hm_limit = c(-2,0,2),legend2show = c(T,T,F,T,T,F),
+              row_font_size = 7)
+
+top_markers= presto_topn_auc(markers,object= atlas_skin_myelo@active.ident,min_pct_in=10, genes_filter=genes_mask_plot, top_n = 120,minavgExpr=0.1)
+
+atlas_skin_myelo <- ScaleData(atlas_skin_myelo,features=c(top_markers$feature))
+
+plot_heatmap2(atlas_skin_myelo, markers =c(top_markers$feature[top_markers$group=="DC2_CD207"][1:100]),sort_var = c("annot_lev3","bodysite"),
+              anno_var = c("annot_lev3","bodysite"),
+              anno_colors = list(pal,pal,pal),
+              hm_colors = c("purple","black","yellow"),
+              hm_limit = c(-2,0,2),legend2show = c(T,T,F,T,T,F),padding=unit(c(0, 0, 0, 6.5), "cm"), 
+              row_font_size = 7)
+
+VlnPlot(atlas_skin_myelo, "log_nCount")+plot_layout(nrow=3, ncol=2)
+
+# remove clusters: 2 KRT epithelial+ Collagenes, 6, 9 & 11 low quality, 8 B cells, 10 collagenes 
+plot(density(atlas_skin_myelo$log_nCount))
+atlas_skin_myelo = subset(atlas_skin_myelo, idents= c(2,6,9,11,8,10), invert=T)
+# 34621 features across 8975
+
+atlas_skin_myelo
+VlnPlot(atlas_skin_myelo, features =c("CD1C","FCER1A","CLEC10A","CD207","CD1A","EPCAM","CCR6","ITGAE","HPGDS","IL18R1","SIGLEC9","CD72","LAMP3","IDO1","CCR7","CLEC9A","CD14"), fill="ident",stack=T, flip=T)+NoLegend()+plot_layout(ncol=3)
+
+markers = presto::wilcoxauc(atlas_skin_myelo, group_by="annot_lev3")
+library(magrittr)
+
+markers = presto::wilcoxauc(atlas_skin_myelo) 
+
+markers$feature = UpdateSymbolsHuman(markers$feature)
+
+top_markers = markers %>% filter(!feature %in% genes_mask_plot & avgExpr>0.1 & logFC>0.1  & pct_in>10) %>% group_by(group) %>% arrange(desc(auc),.by_group =T )
+
+top_markers_distinct = markers %>% filter(!feature %in% genes_mask_plot &  avgExpr>0.1 & pct_in>10 & logFC>0.1)  %>% arrange(desc(avgExpr)) %>% distinct(feature,.keep_all = TRUE) %>% group_by(group) %>% arrange(desc(auc), .by_group =T)
+
+WriteXLS::WriteXLS(top_markers, "results/multisite_skin_atlas_myeloid_clusters_markers.xlsx")
+WriteXLS::WriteXLS(top_markers_distinct, "results/multisite_skin_atlas_myeloid_clusters_markers_distinct.xlsx")
+
+top_markers_distinct_multi_site = readxl::read_excel("results/multisite_skin_atlas_myeloid_clusters_markers_distinct.xlsx")
+top_markers_distinct_woundHealing = readxl::read_excel("results/skin_wound_healing_myeloid_clusters_markers_distinct.xlsx")
+
+share_signature_100= intersect(top_markers_distinct_multi_site$feature[top_markers_distinct_multi_site$group=="DC2_CD207"], top_markers_distinct_woundHealing$feature[top_markers_distinct_woundHealing$group=="DC2_CD207"])[1:100]
+
+atlas_skin_myelo <- ScaleData(atlas_skin_myelo,features=c(share_signature_100))
+
+plot_heatmap2(atlas_skin_myelo, markers =share_signature_100,sort_var = c("annot_lev3","bodysite"),
+              anno_var = c("annot_lev3","bodysite"),
+              anno_colors = list(pal,pal,pal),
+              hm_colors = c("purple","black","yellow"),
+              hm_limit = c(-2,0,2),legend2show = c(T,T,F,T,T,F),padding=unit(c(0, 0, 0, 10), "cm"), 
+              row_font_size = 7)
+
+seu_sub <- ScaleData(seu_sub,features=c(share_signature_100))
+seu_sub$seurat_clusters
+
+plot_heatmap2(seu_sub, markers =share_signature_100,sort_var = c("annot_lev3","timepoint"),
+              anno_var = c("annot_lev3","timepoint"),
+              anno_colors = list(pal,pal,pal),
+              hm_colors = c("purple","black","yellow"),
+              hm_limit = c(-2,0,2),legend2show = c(T,T,F,T,T,F),padding=unit(c(0, 0, 0, 10), "cm"), 
+              row_font_size = 7)
+```
+
+
+ ###########################################################################
+ ########################################################################### 
+ ########################################################################### 
+
+# 3. Bcc_and_normal Spatial-skin-atlas
+```{r Load Data, eval=F}
+# data was downloaded from
+library("Seurat")
+library("anndata")
+# https://github.com/mojaveazure/seurat-disk/issues/109
+print("Convert from Scanpy to Seurat...")
+data <- read_h5ad("../../../../../data_global/public/single_cellRNA/Skin/Spatial-skin-atlas/bcc_and_normal-CG_portal_fat.h5ad")
+str(data$raw$X)
+counts= data$raw$X
+colnames(counts) = colnames(data$X)
+rownames(counts) = rownames(data$X)
+
+seurat_obj <- CreateSeuratObject(counts = t(counts), meta.data = data$obs)
+str(data$obsm$X_umap)
+umap= data$obsm$X_umap
+rownames(umap) = colnames(seurat_obj)
+umap = CreateDimReducObject(umap, key="umap")
+seurat_obj@reductions$umap = umap
+# 32983 features across 155401
+# qs::qsave(seurat_obj, "../../../../../data_global/public/single_cellRNA/Skin/Spatial-skin-atlas/bcc_and_normal-CG_portal_fat_seurat.qs", nthreads = 8)
+```
+
+```{r}
+seurat_obj= qs::qread("../../../../../data_global/public/single_cellRNA/Skin/Spatial-skin-atlas/bcc_and_normal-CG_portal_fat_seurat.qs")
+unique(seurat_obj$`04_celltypes`)
+
+DimPlot(seurat_obj, group.by = "04_celltypes")
+seurat_sub = subset(seurat_obj, `04_celltypes` %in% c("Monocytes","Macrophages","DC"))
+# 23602 cells
+```
+
+```{r Prepare gene masks, eval=T}
+all_genes <- rownames(seurat_sub)
+HB_genes <- c("HBB","HBA1","HBA2", "HBD","HBE1","HBG1","HBM","HBBP1","HBQ1","AHSP")
+metallothionein=c('MT1HL1','MT2A','MT1E','MT1M','MT1A','MT1B','MT1F','MT1G','MT1H','MT1X')
+rpgenes= grep("^RP[LS0-9]", all_genes, value=T) # 
+other=c("MALAT1","XIST","JCHAIN")
+mtgenes=grep("^MT-", all_genes, value=T) 
+MTRN_genes=grep("^MTRN", all_genes, value=T)
+# stress_genes = c("HSPA1B","HSPA6","DNAJB1","HSPA1A","HSPB1","JUN","UBB","DNAJB4","BAG3","UBC","SOD1","RGS2","EIF4A2","SERPINH1","DEDD2","CLK1","AHSA1","COMMD6","HSP90AA1","HSPH1","HSPE1","HSPD1","HSP90AB1","DUSP1","HSPA8","FOS","DNAJA1","PPP1R15A","CACYBP","KLF6","ZFAND2A","NR4A1","FOSB","DNAJA4","CHORDC1","MRPL18","BTG2","FKBP4","NEU1","ATF3","MYADM","ERN1","DOK2","GADD45B","TXNIP","NABP1","SOD2","TCP1","DNAJB6","RHOB","H3F3B","MXD1","AC020916.1","IER5","JUNB","TNFSF14")
+IGgenes = grep("^IG[KLH]", all_genes, value=T)
+HLAgenes = grep("^HLA-", all_genes, value=T)
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+cell_cycle_genes = c(s.genes,g2m.genes)
+genes_mask_clust = c(cell_cycle_genes,HB_genes, metallothionein, rpgenes,other,IGgenes,HLAgenes,MTRN_genes,mtgenes)
+genes_mask_plot = c(HB_genes, metallothionein, rpgenes,other,IGgenes,MTRN_genes,mtgenes)
+```
+
+## 3.1 DimReduction
+```{r }
+DefaultAssay(seurat_sub) = "RNA"
+seurat_sub = NormalizeData(seurat_sub)
+seurat_sub <- CellCycleScoring(seurat_sub, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+seurat_sub = FindVariableFeatures(seurat_sub)
+vargenes = setdiff(VariableFeatures(seurat_sub), genes_mask_clust)
+seurat_sub <- ScaleData(seurat_sub, assay = "RNA", features = vargenes, vars.to.regress =  c("S.Score", "G2M.Score"))
+seurat_sub <- RunPCA(seurat_sub,verbose = FALSE, npcs = 50, reduction.name = "pca", features = vargenes)
+nPC= 18
+ElbowPlot(seurat_sub, ndims = 50, reduction = "pca")+geom_vline(xintercept=nPC,  color="red")+ plot_layout(nrow=2, ncol=2)
+```
+
+## 3.2. Clustering
+
+```{r fig.height=9, fig.width=12}
+seurat_sub <- RunUMAP(seurat_sub, reduction = "pca",min.dist = 0.5,spread = 1,  dims = 1:nPC, reduction.name = "umap")
+DimPlot(seurat_sub, group.by = "04_celltypes")
+
+# 32983 features across 23602
+seurat_sub <- FindNeighbors(seurat_sub, reduction = "pca", dims = 1:nPC)
+seurat_sub <- FindClusters(seurat_sub, resolution = 0.35)
+# Cluster 6 are DC, subset object to cluster 6 and recluster
+DimPlot(seurat_sub)
+ 
+cells= Cells(seurat_sub)
+FeaturePlot(seurat_sub, features=c("FCER1A","CD1C","C5AR1","FOLR2","CD207","SPP1","SELENOP","TREM2"), cells = cells, ncol=4, reduction= "umap") & NoAxes()&coord_equal()
+markers = presto::wilcoxauc(seurat_sub)
+markers_dist = markers %>% filter(!feature %in% genes_mask_clust) %>% arrange(desc(avgExpr)) %>% distinct(feature,.keep_all = TRUE) %>%  group_by(group) %>% arrange(desc(auc)) %>% slice_head(n = 10)
+# plan("multicore", workers = 8) # unstable in rstudio
+```
+Heatmaps
+```{r , fig.height=10.5, fig.width=12, eval=T}
+seu_small= subset(seurat_sub, dowsample=500, group.by="seurat_clusters")
+
+seu_small@active.ident = seu_small$seurat_clusters
+markers = presto::wilcoxauc(seu_small)
+top_markers= presto_topn_auc(markers,object= seu_small@active.ident,min_pct_in=10, genes_filter=genes_mask_plot, top_n = 10,minavgExpr=0.1)
+
+seu_small <- ScaleData(seu_small,features=c(top_markers$feature))
+
+plot_heatmap2(seu_small, markers =unique(c(top_markers$feature)),sort_var = c("seurat_clusters","05_subcelltypes","02_group"),
+              anno_var = c("seurat_clusters","05_subcelltypes","02_group"),
+              anno_colors = list(pal,pal,pal),
+              hm_colors = c("purple","black","yellow"),
+              hm_limit = c(-2,0,2),legend2show = c(T,T,T,T,T,F),
+              row_font_size = 7)
+
+
+seu_small@active.ident = seu_small$`05_subcelltypes`
+
+markers = presto::wilcoxauc(seu_small, group_by="05_subcelltypes")
+
+top_markers= presto_topn_auc(markers,object= seu_small@active.ident,min_pct_in=10, genes_filter=genes_mask_plot, top_n = 80,minavgExpr=0.1)
+
+seu_small <- ScaleData(seu_small,features=c(top_markers$feature))
+
+plot_heatmap2(seu_small, markers =unique(c(top_markers$feature)),sort_var = c("05_subcelltypes","seurat_clusters","02_group"),
+              anno_var = c("05_subcelltypes","seurat_clusters","02_group"),
+              anno_colors = list(pal,pal,pal),
+              hm_colors = c("purple","black","yellow"),
+              hm_limit = c(-2,0,2),legend2show = c(T,T,T,T,T,F),
+              row_font_size = 7)
+
+top_markers= presto_topn_auc(markers,object= seu_small@active.ident,min_pct_in=10, genes_filter=genes_mask_plot, top_n = 100,minavgExpr=0.1)
+
+seu_small <- ScaleData(seu_small,features=c(top_markers$feature))
+
+plot_heatmap2(seu_small, markers =unique(c(top_markers$feature[top_markers$group=="12"])),sort_var = c("seurat_clusters","05_subcelltypes","02_group"),
+              anno_var = c("seurat_clusters","05_subcelltypes","02_group"),
+              anno_colors = list(pal,pal,pal),
+              hm_colors = c("purple","black","yellow"),
+              hm_limit = c(-2,0,2),legend2show = c(T,T,T,T,T,F),
+              row_font_size = 7)
+
+markers %>% filter(!feature %in% genes_mask_clust)  %>%  arrange(desc(avgExpr)) %>% distinct(feature,.keep_all = TRUE) %>% group_by(group) %>% arrange(desc(auc)) %>% filter(group=="9") %>% slice_head(n = 200) %>% pull(feature)
+
+```
+
+ ###########################################################################
+ ###########################################################################
+ ###########################################################################
+ 
+ 
+# 4. Chronic Inf Skin disease atlas
+
+```{r}
+atlas_skin_myelo = readRDS("../../../../../data_global/public/single_cellRNA/Skin/Chronic Inf Skin disease/Manuscript Object.rds")
+rownames(atlas_skin_myelo@assays$ADT)
+VlnPlot(subset(atlas_skin_myelo,type=="APC") , "EPCAM", group.by = "Ident1")
+
+##### remove mouse genes from the Objects / contamination?
+mouse_genes <- grep("^mm10---", rownames(atlas_skin_myelo), value = TRUE)
+human_genes = setdiff(rownames(atlas_skin_myelo), mouse_genes)
+atlas_skin_myelo <- subset(atlas_skin_myelo, features = human_genes)
+# 33570 features across 145810
+```
+
+Extract metadata from sample names
+```{r}
+all_genes <- rownames(atlas_skin_myelo)
+HB_genes <- c("HBB","HBA1","HBA2", "HBD","HBE1","HBG1","HBM","HBBP1","HBQ1","AHSP")
+metallothionein=c('MT1HL1','MT2A','MT1E','MT1M','MT1A','MT1B','MT1F','MT1G','MT1H','MT1X')
+rpgenes= grep("^RP[LS0-9]", all_genes, value=T) # 
+other=c("MALAT1","XIST","JCHAIN",grep("^IGLL", all_genes, value=T))
+mtgenes=grep("^MT-", all_genes, value=T) 
+MTRN_genes=grep("^MTRN", all_genes, value=T)
+# stress_genes = c("HSPA1B","HSPA6","DNAJB1","HSPA1A","HSPB1","JUN","UBB","DNAJB4","BAG3","UBC","SOD1","RGS2","EIF4A2","SERPINH1","DEDD2","CLK1","AHSA1","COMMD6","HSP90AA1","HSPH1","HSPE1","HSPD1","HSP90AB1","DUSP1","HSPA8","FOS","DNAJA1","PPP1R15A","CACYBP","KLF6","ZFAND2A","NR4A1","FOSB","DNAJA4","CHORDC1","MRPL18","BTG2","FKBP4","NEU1","ATF3","MYADM","ERN1","DOK2","GADD45B","TXNIP","NABP1","SOD2","TCP1","DNAJB6","RHOB","H3F3B","MXD1","AC020916.1","IER5","JUNB","TNFSF14")
+IGgenes = grep("^IG[KLH]", all_genes, value=T)
+HLAgenes = grep("^HLA-", all_genes, value=T)
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+cell_cycle_genes = c(s.genes,g2m.genes)
+genes_mask_clust = c(cell_cycle_genes,HB_genes, metallothionein, rpgenes,other,IGgenes,HLAgenes,MTRN_genes,mtgenes)
+genes_mask_plot = c(HB_genes, metallothionein, rpgenes,other,IGgenes,MTRN_genes,mtgenes)
+```
+
+## 4.1. DimReduction
+```{r }
+str(atlas_skin_myelo@meta.data)
+tabl(atlas_skin_myelo$Ident2)
+tabl(skin_sub$Ident2)
+skin_sub = subset(atlas_skin_myelo, Ident2 %in% c("Mac1","Mac2","Mono","InfMono","moDC1","moDC2","moDC3","LC1","LC2","LC3","DC1","DC2","migDC","DC3","Mac2","Mac3","Mac4"), invert=F)
+Idents(skin_sub)= skin_sub$Ident2
+skin_sub = subset(skin_sub, downsample=500)
+DefaultAssay(skin_sub) = "RNA"
+skin_sub = NormalizeData(skin_sub) 
+skin_sub <- CellCycleScoring(skin_sub, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+skin_sub = FindVariableFeatures(skin_sub, nfeatures = 2000)
+VariableFeatures(skin_sub)= vargenes
+vargenes = setdiff(VariableFeatures(skin_sub), genes_mask_clust)
+skin_sub <- ScaleData(skin_sub, assay = "RNA", features = vargenes, vars.to.regress =  c("S.Score", "G2M.Score"))
+skin_sub <- RunPCA(skin_sub,verbose = FALSE, npcs = 50, reduction.name = "pca", features = vargenes)
+nPC= 18
+
+ElbowPlot(skin_sub, ndims = 50, reduction = "pca")+geom_vline(xintercept=nPC,  color="red")
+skin_sub <- RunUMAP(skin_sub, reduction = "pca",min.dist = 0.5,spread = 1,  dims = 1:nPC, reduction.name = "umap")
+```
+
+## 4.2. Clustering
+
+```{r fig.height=9, fig.width=12}
+# 33952 features across 24700
+skin_sub$Ident2 = factor(skin_sub$Ident2 , levels=  c("Mac1","Mac2","Mac3","Mac4","Mono","InfMono","moDC1","moDC2","moDC3","LC1","LC2","LC3","DC1","DC2","migDC","DC3"))
+skin_sub <- FindNeighbors(skin_sub, reduction = "pca", dims = 1:nPC)
+skin_sub <- FindClusters(skin_sub, resolution = 0.5)
+skin_sub <- FindClusters(skin_sub, resolution = 0.8)
+skin_sub <- FindClusters(skin_sub, resolution = 1.5)
+# Cluster 6 are DC, subset object to cluster 6 and recluster
+cells= Cells(skin_sub)
+FeaturePlot(skin_sub, features=c("FCER1A","CD1C","C5AR1","FOLR2","CD207","CLEC9A","XCR1","CLEC10A"), cells = cells, ncol=4, reduction= "umap") & NoAxes()&coord_equal()
+markers = presto::wilcoxauc(skin_sub,group.by = "seurat_clusters")
+
+markers_dist = markers %>% filter(!feature %in% genes_mask_clust) %>% arrange(desc(avgExpr)) %>% distinct(feature,.keep_all = TRUE) %>%  group_by(group) %>% arrange(desc(auc)) %>% slice_head(n = 30)
+
+DimPlot(skin_sub, group.by = "seurat_clusters")
+
+saveRDS(skin_sub, "./skin_sub.rds", compress=F)
+skin_sub = readRDS("skin_sub.rds")
+```
+
+Heatmaps
+```{r , fig.height=10.5, fig.width=12.5, eval=F}
+skin_sub@active.ident = factor(skin_sub$seurat_clusters)
+genes2show= c("CD1C","FCER1A","CLEC10A","CD207","CD1A","CCR6","EPCAM")
+markers = presto::wilcoxauc(skin_sub, group_by="seurat_clusters")
+top_markers= presto_topn_auc(markers,object= skin_sub@active.ident,min_pct_in=10, genes_filter=genes_mask_clust, top_n = 8,minavgExpr=0.1)
+
+skin_sub <- ScaleData(skin_sub,features=c(genes2show,top_markers$feature))
+
+plot_heatmap2(skin_sub, markers =c(genes2show,top_markers$feature),sort_var = c("seurat_clusters","Ident2","orig.ident"),
+              anno_var = c("seurat_clusters","Ident2","orig.ident"),
+              anno_colors = list(pal,pal,pal),
+              hm_colors = c("purple","black","yellow"),
+              hm_limit = c(-2,0,2),legend2show = c(T,T,F,T,T,F),
+              row_font_size = 6)
+
+skin_sub@active.ident = factor(skin_sub$Ident2)
+
+markers = presto::wilcoxauc(skin_sub, group_by="Ident2")
+
+top_markers= presto_topn_auc(markers,object= skin_sub@active.ident,min_pct_in=20, genes_filter=genes_mask_clust, top_n = 10,minavgExpr=0.1)
+
+skin_sub <- ScaleData(skin_sub,features=c(top_markers$feature))
+
+plot_heatmap2(skin_sub, markers = unique(c(top_markers$feature)),sort_var = c("Ident2","seurat_clusters","orig.ident"),
+              anno_var = c("Ident2","seurat_clusters","orig.ident"),
+              anno_colors = list(pal,pal,pal),
+              hm_colors = c("purple","black","yellow"),
+              hm_limit = c(-2,0,2),legend2show = c(T,T,F,T,T,F),
+              row_font_size = 7)
+
+markers %>% filter(!feature %in% genes_mask_clust)  %>%  arrange(desc(avgExpr)) %>% distinct(feature,.keep_all = TRUE) %>% group_by(group) %>% arrange(desc(auc)) %>% filter(group=="LC") %>% slice_head(n = 200) %>% pull(feature)
+
+markers %>% filter(!feature %in% genes_mask_clust)  %>%  arrange(desc(avgExpr)) %>% distinct(feature,.keep_all = TRUE) %>% group_by(group) %>% arrange(desc(auc)) %>% filter(feature=="CD207")
+top_markers %>% filter(group=="2") 
+
+```
+
+
