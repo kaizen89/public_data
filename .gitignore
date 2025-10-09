@@ -1,0 +1,21 @@
+*.html
+*.txt
+*.pdf
+*.rds
+*.RDS
+*.qs
+*.xlsx
+*.csv
+# Ignore everything
+*
+
+# But don't ignore directories (so we can re-include R files in subfolders)
+!*/
+
+# Re-include R and Rmd files
+!*.R
+!*.Rmd
+!*.md
+
+# Keep this .gitignore tracked
+!.gitignore

@@ -3,31 +3,27 @@ title: "Report_Analysis of Langerhans cells from public datasets"
 author: "Abdenour ABBAS "
 date: '`r format(Sys.Date(), "%B %d, %Y")`'
 output:
-  html_document:
-    toc: true
-    toc_float: true
-    code_folding: hide
-    theme: flatly
-    highlight: tango
-    self_contained: true
+  github_document:
+    html_preview: true
 editor_options: 
   chunk_output_type: inline
 ---
 
 
-```{css, echo=FALSE}
-/* Section headers */
-h1 { font-size: 1.6em; }
-h2 { font-size: 1.3em; }
-h3 { font-size: 1.1em; }
+<!-- ```{css, echo=FALSE} -->
+<!-- /* Section headers */ -->
+<!-- h1 { font-size: 1.6em; } -->
+<!-- h2 { font-size: 1.3em; } -->
+<!-- h3 { font-size: 1.1em; } -->
 
-/* Document title, author, date */
-.title  { font-size: 2em; font-weight: bold; text-align: center; }
-.author { font-size: 1.2em; font-style: italic; text-align: center; }
-.date   { font-size: 1em; color: #555; text-align: center; }
-```
+<!-- /* Document title, author, date */ -->
+<!-- .title  { font-size: 2em; font-weight: bold; text-align: center; } -->
+<!-- .author { font-size: 1.2em; font-style: italic; text-align: center; } -->
+<!-- .date   { font-size: 1em; color: #555; text-align: center; } -->
+<!-- ``` -->
 
 
+The goad of this analysis is to identify Langerhans Cells (LC) in public datasets and generate LC genesets that will be later used to compare tumor-DC activation states
 ```{r setup, message=FALSE}
 library(knitr)
 opts_chunk$set(fig.align = "center",
@@ -71,11 +67,12 @@ options(ggplot2.discrete.fill=pal)
 # scales::show_col(pal)
 ```
 
-# 1. Wound Healing Dataset
+# 1. Wound Healing Dataset (GSE241132)
+From paper PMID:39729995 (https://pubmed.ncbi.nlm.nih.gov/39729995/)
 ```{r Load Data}
 # ---- PARAMETERS ----
 # Path where all 10X subfolders are located
-data_dir <- "../../../../../data_global/public/single_cellRNA/Skin/GSE241132_human skin wound healing/GSE241132_RAW/"  # <- change this
+data_dir <- "../../../../../data_global/public/single_cellRNA/Skin/GSE241132_human skin wound healing/GSE241132_RAW/"  
 
 # Get all subfolders (each one should contain matrix.mtx.gz, barcodes.tsv.gz, features.tsv.gz)
 folders <- list.dirs(data_dir, full.names = TRUE, recursive = FALSE)
@@ -117,7 +114,6 @@ merged$barcode = colnames(merged)
 merged = PercentageFeatureSet(merged, pattern = "^MT-", col.name = "percent.mt")
 # ---- SAVE RESULT ----
 VlnPlot(merged, "nFeature_RNA")+ scale_y_log10()
-# cat("✅ Done! Saved merged Seurat object as merged_seurat.rds\n")
 ```
 
 ```{r eval=F}
@@ -216,15 +212,14 @@ seu_sub@active.ident = seu_sub$annot_lev3
 ## 1.4. Visualization
 Heatmaps
 ```{r , fig.height=10.5, fig.width=11.5, eval=T}
-seu_sub$seurat_clusters = seu_sub@active.ident
-markers = presto::wilcoxauc(seu_sub, group_by="seurat_clusters")
+markers = presto::wilcoxauc(seu_sub, group_by="annot_lev3")
 top_markers= presto_topn_auc(markers,object= seu_sub@active.ident,min_pct_in=10, genes_filter=genes_mask_plot, top_n = 15,minavgExpr=0.1)
 
 seu_sub <- ScaleData(seu_sub,features=c(top_markers$feature))
 
 
-plot_heatmap2(seu_sub, markers =unique(c(top_markers$feature)),sort_var = c("seurat_clusters","subtype","timepoint"),
-              anno_var = c("seurat_clusters","subtype","timepoint"),
+plot_heatmap2(seu_sub, markers =unique(c(top_markers$feature)),sort_var = c("annot_lev3","subtype","timepoint"),
+              anno_var = c("annot_lev3","subtype","timepoint"),
               anno_colors = list(pal,pal,pal),
               hm_colors = c("purple","black","yellow"),
               hm_limit = c(-2,0,2),legend2show = c(T,T,T,T,T,F),padding = unit(c(0, 0, 0,2), "cm"),
@@ -236,8 +231,8 @@ top_markers= presto_topn_auc(markers,object= seu_sub@active.ident,min_pct_in=10,
 
 seu_sub <- ScaleData(seu_sub,features=c(top_markers$feature))
 
-plot_heatmap2(seu_sub,  markers = unique(c(top_markers$feature[top_markers$group=="7"])),sort_var = c("seurat_clusters","subtype","timepoint"),
-              anno_var = c("seurat_clusters","subtype","timepoint"),
+plot_heatmap2(seu_sub,  markers = unique(c(top_markers$feature[top_markers$group=="LC"])),sort_var = c("annot_lev3","subtype","timepoint"),
+              anno_var = c("annot_lev3","subtype","timepoint"),
               anno_colors = list(pal,pal,pal),
               hm_colors = c("purple","black","yellow"),
               hm_limit = c(-2,0,2),legend2show = c(T,T,T,T,T,F),padding = unit(c(0, 0, 0, 5), "cm"),
@@ -267,8 +262,8 @@ top_markers_distinct = markers %>% filter(!feature %in% genes_mask_plot &  avgEx
  ################################################################################
  ################################################################################
 
-# 2. Multi-site Skin Atlas
-Multi site Skin Atlas (biorXiv)
+# 2. Multi-site Skin Atlas https://doi.org/10.1101/2025.05.10.653184
+Multi site Skin Atlas (still in biorXiv)
 ```{r}
 # atlas_skin_seu = readRDS("../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3.RDS")
 atlas_skin_seu@assays$RNA$scale.data = NULL
@@ -351,12 +346,12 @@ markers_dist = markers %>% filter(!feature %in% genes_mask_clust) %>% arrange(de
 ```
 
 ```{r eval=T}
-DimPlot(atlas_skin_myelo_tmp, group.by = "seurat_clusters")+plot_spacer()
+DimPlot(atlas_skin_myelo_tmp, group.by = "RNA_snn_res.0.2")+plot_spacer()
 ```
 
 ## 2.4. Visualization and removing junk clusters
 Heatmaps
-```{r , fig.height=11, fig.width=12.5, eval=F}
+```{r , fig.height=11, fig.width=12.5, eval=T}
 atlas_skin_myelo_tmp@active.ident = factor(atlas_skin_myelo_tmp$seurat_clusters)
 genes2show= c("CD1C","FCER1A","CLEC10A","CD207","CD1A","CCR6","EPCAM")
 markers = presto::wilcoxauc(atlas_skin_myelo_tmp, group_by="seurat_clusters")
@@ -372,13 +367,17 @@ plot_heatmap2(atlas_skin_myelo_tmp, markers =c(genes2show,top_markers$feature),s
               hm_limit = c(-2,0,2),legend2show = c(T,T,F,T,T,F),
               row_font_size = 7)
 
+
+top_markers= presto_topn_auc(markers,object= seu_sub@active.ident,min_pct_in=10, max_pct_out = 100, genes_filter=genes_mask_clust, top_n = 100,minavgExpr=0.1)
+
+seu_sub <- ScaleData(seu_sub,features=c(top_markers$feature))
+
 VlnPlot(atlas_skin_myelo_tmp, "log_nCount")+plot_layout(nrow=3, ncol=2)
 
-# remove clusters: 2 KRT epithelial+ Collagenes, 6, 9 & 11 low quality, 8 B cells, 10 enriched in collagen genes
-# atlas_skin_myelo = subset(atlas_skin_myelo_tmp, idents= c(2,6,9,11,8,10), invert=T)
-# 34621 features across 8975
 ```
 
+
+I will remove clusters: 2 (KRT epithelial+ Collagenes), 6, 9 & 11 (low quality: see VlnPlot ou nCounts_RNA), 8 (B cells), 10 (high levels of collagen genes)
 
 ```{r eval=T}
 # atlas_skin_myelo = subset(atlas_skin_myelo_tmp, idents= c(2,6,9,11,8,10), invert=T)
@@ -386,7 +385,7 @@ VlnPlot(atlas_skin_myelo_tmp, "log_nCount")+plot_layout(nrow=3, ncol=2)
 atlas_skin_myelo = qread("../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo_reprocessed_final.qs", nthreads = 8)
 ```
 
-## 2.5. Repeating DimReduction
+## 2.5. DimReduction v2
 ```{r}
 atlas_skin_myelo = FindVariableFeatures(atlas_skin_myelo, nfeatures = 2000)
 vargenes = setdiff(VariableFeatures(atlas_skin_myelo), genes_mask_clust)
@@ -400,7 +399,7 @@ nPC= 17
 ElbowPlot(atlas_skin_myelo, ndims = 50, reduction = "pca")+geom_vline(xintercept=nPC,  color="red")+plot_layout(nrow=2, ncol=2)
 ```
 
-## 2.6. Repeating Clustering
+## 2.6. Clustering v2
 
 ```{r fig.height=9, fig.width=12}
 # 33952 features across 24700
@@ -422,27 +421,17 @@ DimPlot(atlas_skin_myelo, group.by="seurat_clusters")
 atlas_skin_myelo$seurat_clusters = factor(atlas_skin_myelo$RNA_snn_res.0.3, levels= c("4","7","3","0","8","5","6","2","1"))  # levels(p$data$x)
 
 atlas_skin_myelo$res.0.3 = plyr::mapvalues(atlas_skin_myelo$seurat_clusters, from = c("4","7","3","0","8","5","6","2","1"), to =c(1:9))
-atlas_skin_myelo$annot_lev3 = plyr::mapvalues(atlas_skin_myelo$res.0.3, from = c(1:9), to =c("DC1","mature_DC","DC2","DC2_CCR7","DC2_cyc","DC3","DC_other","DC2_CD207","MonoMac"))
+atlas_skin_myelo$annot_lev3 = plyr::mapvalues(atlas_skin_myelo$res.0.3, from = c(1:9), to =c("DC1","mature_DC","DC2","DC2_CCR7","DC2_cyc","DC3","DC_other","LC","MonoMac"))
 atlas_skin_myelo@active.ident = atlas_skin_myelo$annot_lev3
-```
-
-```{r eval=T}
-DimPlot(atlas_skin_myelo, group.by="annot_lev3")
-```
-
-
-## 2.7 Save final processed object
-```{r eval=T}
-qsave(atlas_skin_myelo, "../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo_reprocessed_final.qs", nthreads = 8)
 ```
 
 ```{r eval=T}
 DimPlot(atlas_skin_myelo, group.by = c("RNA_snn_res.0.3", "res.0.3", "annot_lev3"), ncol=3, reduction= "umap") & NoAxes()&coord_equal()
 ```
 
-## 2.8. Visualization
+## 2.7. Visualization
 Heatmaps
-```{r , fig.height=11, fig.width=12.5, eval=F}
+```{r , fig.height=11, fig.width=12.5, eval=T}
 atlas_skin_myelo@active.ident = factor(atlas_skin_myelo$annot_lev3)
 genes2show= c("CD1C","FCER1A","CLEC10A","CD207","CD1A","ITGAE","IL18R1","CCR6","EPCAM","LAMP3","IDO1","CCR7","CLEC9A")
 markers = presto::wilcoxauc(atlas_skin_myelo, group_by="annot_lev3")
@@ -461,7 +450,7 @@ top_markers= presto_topn_auc(markers,object= atlas_skin_myelo@active.ident,min_p
 
 atlas_skin_myelo <- ScaleData(atlas_skin_myelo,features=c(top_markers$feature))
 
-plot_heatmap2(atlas_skin_myelo, markers =c(top_markers$feature[top_markers$group=="DC2_CD207"][1:100]),sort_var = c("annot_lev3","bodysite"),
+plot_heatmap2(atlas_skin_myelo, markers =c(top_markers$feature[top_markers$group=="LC"][1:100]),sort_var = c("annot_lev3","bodysite"),
               anno_var = c("annot_lev3","bodysite"),
               anno_colors = list(pal,pal,pal),
               hm_colors = c("purple","black","yellow"),
@@ -470,14 +459,6 @@ plot_heatmap2(atlas_skin_myelo, markers =c(top_markers$feature[top_markers$group
 
 VlnPlot(atlas_skin_myelo, "log_nCount")+plot_layout(nrow=3, ncol=2)
 
-# # remove clusters: 2 KRT epithelial+ Collagenes, 6, 9 & 11 low quality, 8 B cells, 10 collagenes 
-# plot(density(atlas_skin_myelo$log_nCount))
-# atlas_skin_myelo = subset(atlas_skin_myelo, idents= c(2,6,9,11,8,10), invert=T)
-# # 34621 features across 8975
-# 
-# atlas_skin_myelo
-# VlnPlot(atlas_skin_myelo, features =c("CD1C","FCER1A","CLEC10A","CD207","CD1A","EPCAM","CCR6","ITGAE","HPGDS","IL18R1","SIGLEC9","CD72","LAMP3","IDO1","CCR7","CLEC9A","CD14"), fill="ident",stack=T, flip=T)+NoLegend()+plot_layout(ncol=3)
-# 
 # markers = presto::wilcoxauc(atlas_skin_myelo, group_by="annot_lev3")
 # library(magrittr)
 # 
@@ -495,6 +476,10 @@ VlnPlot(atlas_skin_myelo, "log_nCount")+plot_layout(nrow=3, ncol=2)
 # top_markers_distinct_multi_site = readxl::read_excel("results/multisite_skin_atlas_myeloid_clusters_markers_distinct.xlsx")
 # top_markers_distinct_woundHealing = readxl::read_excel("results/skin_wound_healing_myeloid_clusters_markers_distinct.xlsx")
 
+```
+## 2.8 Save final processed object
+```{r }
+# qsave(atlas_skin_myelo, "../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo_reprocessed_final.qs", nthreads = 8)
 ```
 
 
