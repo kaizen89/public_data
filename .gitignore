@@ -16,6 +16,7 @@
 !*.R
 !*.Rmd
 !*.md
+!*.png
 
 # Keep this .gitignore tracked
 !.gitignore
