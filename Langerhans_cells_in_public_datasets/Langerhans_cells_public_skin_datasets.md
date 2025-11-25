@@ -1,7 +1,7 @@
 Report_Analysis of Langerhans cells from public datasets
 ================
 Abdenour ABBAS
-October 09, 2025
+November 25, 2025
 
 <!-- ```{css, echo=FALSE} -->
 
@@ -83,7 +83,7 @@ From paper <PMID:39729995> (<https://pubmed.ncbi.nlm.nih.gov/39729995/>)
 ``` r
 # ---- PARAMETERS ----
 # Path where all 10X subfolders are located
-data_dir <- "../../../../../data_global/public/single_cellRNA/Skin/GSE241132_human skin wound healing/GSE241132_RAW/"  
+data_dir <- "../../../../data_global/public/single_cellRNA/Skin/GSE241132_human skin wound healing/GSE241132_RAW/"  
 
 # Get all subfolders (each one should contain matrix.mtx.gz, barcodes.tsv.gz, features.tsv.gz)
 folders <- list.dirs(data_dir, full.names = TRUE, recursive = FALSE)
@@ -140,7 +140,7 @@ merged %<>% subset(subset= nFeature_RNA>500) %<>% subset(percent.mt <20)
 # plot(density(merged$percent.mt)) 
 # plot(density(metadata$nCount_RNA))
 # table(merged$nFeature_RNA<501) 
-metadata <- read.delim("../../../../../data_global/public/single_cellRNA/Skin/GSE241132_human skin wound healing/GSE241132_cell_metadata.txt")
+metadata <- read.delim("../../../../data_global/public/single_cellRNA/Skin/GSE241132_human skin wound healing/GSE241132_cell_metadata.txt")
 merged$cell_type = metadata$newMainCellTypes[match(merged$barcode, metadata$barcode)]
 merged$subtype = metadata$newCellTypes[match(merged$barcode, metadata$barcode)]
 DimPlot(merged, group.by = "subtype")
@@ -350,10 +350,10 @@ top_markers_distinct = markers %>% filter(!feature %in% genes_mask_plot &  avgEx
 Multi site Skin Atlas (still in biorXiv)
 
 ``` r
-# atlas_skin_seu = readRDS("../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3.RDS")
+# atlas_skin_seu = readRDS("../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3.RDS")
 atlas_skin_seu@assays$RNA$scale.data = NULL
-# qsave(atlas_skin_seu, "../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3.qs", nthreads = 8)
-atlas_skin_seu = qread("../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3.qs", nthreads = 8)
+# qsave(atlas_skin_seu, "../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3.qs", nthreads = 8)
+atlas_skin_seu = qread("../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3.qs", nthreads = 8)
 ```
 
 ## 2.1 Subsetting myeloid cells
@@ -363,15 +363,15 @@ atlas_skin_seu= NormalizeData(atlas_skin_seu)
 DimPlot(atlas_skin_seu)
 # str(atlas_skin_seu)
 atlas_skin_myelo = subset(atlas_skin_seu, celltype=="Myeloid Cells") 
-# qsave(atlas_skin_myelo, "../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo.qs", nthreads = 8)
+# qsave(atlas_skin_myelo, "../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo.qs", nthreads = 8)
 ```
 
 ``` r
-# atlas_skin_myelo_tmp = qread("../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo.qs", nthreads = 8)
+# atlas_skin_myelo_tmp = qread("../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo.qs", nthreads = 8)
 # str(atlas_skin_myelo_tmp)
 
 # same object but already clustered
-atlas_skin_myelo_tmp = qread("../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo_processed_intermediate.qs", nthreads = 8)
+atlas_skin_myelo_tmp = qread("../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo_processed_intermediate.qs", nthreads = 8)
 # str(atlas_skin_myelo_tmp)
 ```
 
@@ -430,7 +430,7 @@ markers = presto::wilcoxauc(atlas_skin_myelo_tmp,group.by = "seurat_clusters")
 
 markers_dist = markers %>% filter(!feature %in% genes_mask_clust) %>% arrange(desc(avgExpr)) %>% distinct(feature,.keep_all = TRUE) %>%  group_by(group) %>% arrange(desc(auc)) %>% slice_head(n = 30)
 
-# qsave(atlas_skin_myelo_tmp  , "../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo_processed_intermediate.qs", nthreads = 8)
+# qsave(atlas_skin_myelo_tmp  , "../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo_processed_intermediate.qs", nthreads = 8)
 ```
 
 ``` r
@@ -496,7 +496,7 @@ collagen genes)
 ``` r
 # atlas_skin_myelo = subset(atlas_skin_myelo_tmp, idents= c(2,6,9,11,8,10), invert=T)
 # this is to read the final object with the most recent clustering
-atlas_skin_myelo = qread("../../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo_reprocessed_final.qs", nthreads = 8)
+atlas_skin_myelo = qread("../../../../data_global/public/single_cellRNA/Skin/Atlas_multi_skin/seurat_v3_myelo_reprocessed_final.qs", nthreads = 8)
 ```
 
 ## 2.5. DimReduction v2
